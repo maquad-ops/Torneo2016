@@ -27,10 +27,26 @@
     fetch(CSV_URL)
       .then(r => r.text())
       .then(csv => {
-        const righe = csv.trim().split('\n').slice(1); // salta intestazione
+        const righe = csv.trim().split('\n').slice(1);
         const partite = righe.map(r => {
-          const [data, casa, ospite, gc, go] = r.split(',');
-          return { data, casa, ospite, gc: +gc, go: +go };
+          const [data, primoTempo, secondoTempo, casa, ospite, gol_casa, gol_ospite, campo] = r.split(',');
+
+          // controlla se la partita non è ancora iniziata
+          const gcRaw = gol_casa ? gol_casa.trim() : '-';
+          const goRaw = gol_ospite ? gol_ospite.trim() : '-';
+          const daGiocare = gcRaw === '-' || goRaw === '-';
+
+          return {
+            data: data ? data.trim() : '',
+            primoTempo: primoTempo ? primoTempo.trim() : '',
+            secondoTempo: secondoTempo ? secondoTempo.trim() : '',
+            casa: casa ? casa.trim() : '',
+            ospite: ospite ? ospite.trim() : '',
+            gc: daGiocare ? null : +gcRaw,
+            go: daGiocare ? null : +goRaw,
+            daGiocare,
+            campo: campo ? campo.trim() : '—'
+          };
         });
 
         mostraPartite(partite);
@@ -38,10 +54,30 @@
       });
 
     function mostraPartite(partite) {
-      let html = '<table><tr><th>Data</th><th>Casa</th><th>Risultato</th><th>Ospite</th></tr>';
+      let html = `<table>
+        <tr>
+          <th>Data</th>
+          <th>Orari</th>
+          <th>Casa</th>
+          <th>Risultato</th>
+          <th>Ospite</th>
+          <th>Campo</th>
+        </tr>`;
       partite.forEach(p => {
-        const ris = `${p.gc} - ${p.go}`;
-        html += `<tr><td>${p.data}</td><td>${p.casa}</td><td><strong>${ris}</strong></td><td>${p.ospite}</td></tr>`;
+        const risultato = p.daGiocare
+          ? `<td class="da-giocare">da giocare</td>`
+          : `<td class="risultato">${p.gc} - ${p.go}</td>`;
+        html += `<tr>
+          <td>${p.data}</td>
+          <td>
+            <span class="orario">1T: ${p.primoTempo}</span><br>
+            <span class="orario">2T: ${p.secondoTempo}</span>
+          </td>
+          <td>${p.casa}</td>
+          ${risultato}
+          <td>${p.ospite}</td>
+          <td>${p.campo}</td>
+        </tr>`;
       });
       html += '</table>';
       document.getElementById('partite').innerHTML = html;
@@ -49,22 +85,61 @@
 
     function mostraClassifica(partite) {
       const sq = {};
-      partite.forEach(({ casa, ospite, gc, go }) => {
+
+      // inizializza tutte le squadre (anche quelle con partite non ancora giocate)
+      partite.forEach(({ casa, ospite }) => {
         [casa, ospite].forEach(s => {
-          if (!sq[s]) sq[s] = { pg:0, v:0, n:0, p:0, gf:0, gs:0, pt:0 };
+          if (!sq[s]) sq[s] = { pg:0, v:0, n:0, p:0, gf:0, gs:0, dr:0, pt:0 };
         });
-        sq[casa].pg++; sq[ospite].pg++;
-        sq[casa].gf += gc; sq[casa].gs += go;
-        sq[ospite].gf += go; sq[ospite].gs += gc;
-        if (gc > go) { sq[casa].v++; sq[casa].pt+=3; sq[ospite].p++; }
-        else if (gc < go) { sq[ospite].v++; sq[ospite].pt+=3; sq[casa].p++; }
-        else { sq[casa].n++; sq[ospite].n++; sq[casa].pt++; sq[ospite].pt++; }
       });
 
-      const sorted = Object.entries(sq).sort((a,b) => b[1].pt - a[1].pt || (b[1].gf-b[1].gs)-(a[1].gf-a[1].gs));
-      let html = '<table><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>N</th><th>P</th><th>GF</th><th>GS</th><th>Pt</th></tr>';
+      // calcola solo le partite già giocate
+      partite.forEach(({ casa, ospite, gc, go, daGiocare }) => {
+        if (daGiocare) return; // salta le partite non ancora giocate
+
+        sq[casa].pg++;  sq[ospite].pg++;
+        sq[casa].gf  += gc; sq[casa].gs  += go;
+        sq[ospite].gf += go; sq[ospite].gs += gc;
+
+        if (gc > go) {
+          sq[casa].v++;   sq[casa].pt   += 3;
+          sq[ospite].p++;
+        } else if (gc < go) {
+          sq[ospite].v++; sq[ospite].pt += 3;
+          sq[casa].p++;
+        } else {
+          sq[casa].n++;   sq[casa].pt++;
+          sq[ospite].n++; sq[ospite].pt++;
+        }
+      });
+
+      // calcola differenza reti
+      Object.values(sq).forEach(s => { s.dr = s.gf - s.gs; });
+
+      // ordina per punti, poi DR, poi GF
+      const sorted = Object.entries(sq).sort((a, b) =>
+        b[1].pt - a[1].pt ||
+        b[1].dr - a[1].dr ||
+        b[1].gf - a[1].gf
+      );
+
+      let html = `<table>
+        <tr>
+          <th>#</th><th>Squadra</th><th>PG</th><th>V</th>
+          <th>N</th><th>P</th><th>GF</th><th>GS</th>
+          <th>DR</th><th>Pt</th>
+        </tr>`;
       sorted.forEach(([nome, s], i) => {
-        html += `<tr><td>${i+1}</td><td>${nome}</td><td>${s.pg}</td><td>${s.v}</td><td>${s.n}</td><td>${s.p}</td><td>${s.gf}</td><td>${s.gs}</td><td><strong>${s.pt}</strong></td></tr>`;
+        const drClass = s.dr > 0 ? 'dr-pos' : s.dr < 0 ? 'dr-neg' : 'dr-zero';
+        const drLabel = s.dr > 0 ? `+${s.dr}` : `${s.dr}`;
+        html += `<tr>
+          <td>${i+1}</td>
+          <td>${nome}</td>
+          <td>${s.pg}</td><td>${s.v}</td><td>${s.n}</td><td>${s.p}</td>
+          <td>${s.gf}</td><td>${s.gs}</td>
+          <td class="${drClass}">${drLabel}</td>
+          <td><strong>${s.pt}</strong></td>
+        </tr>`;
       });
       html += '</table>';
       document.getElementById('classifica').innerHTML = html;
